@@ -1,0 +1,88 @@
+void setup() {
+    // Initialize serial communication for debugging
+    Serial.begin(115200);
+    Serial.setDebugOutput(true);
+    Serial.println("ESP32 SBR"); // Print startup message
+    Serial.println("============================================================");
+    
+    // Set pin modes for motor control
+    pinMode(PIN_MOTOR_IN1, OUTPUT);
+    pinMode(PIN_MOTOR_IN2, OUTPUT);
+    pinMode(PIN_MOTOR_IN3, OUTPUT);
+    pinMode(PIN_MOTOR_IN4, OUTPUT);
+    delay(50); // Add delay for stability
+    
+    // Initialize I2C communication
+    Wire.begin();
+    
+    // Initialize MPU6050 sensor
+    initMPU6050();
+    
+    // Initialize Modbus Transmission Control Protocol (TCP) server
+    initNetwork();
+    
+    // Initialize PID controller if enabled
+    #ifdef ENABLE_PID
+    stabilityControl.SetOutputLimits(-250, 250); // Set output limit
+    stabilityControl.SetMode(PID::Automatic); // Change PID mode to automatic
+    stabilityControl.SetSampleTime(10); // Set sample time to time that you want to use, in ex 10 ms.
+    stabilityControl.Start(angleSample, 0, targetAngle); // Starting the PID controller
+    #endif
+    
+    Serial.println(""); // Print a blank line
+    Serial.print("Setup Complete"); // Print setup completion message
+}
+
+void loop() {
+    // Calculate the target speed using PID controller
+    double targetSpeed = stabilityControl.Run(angleSample);// Raw PID
+    targetSpeed = -targetSpeed; // Invert speed if needed
+    double finalSpeed = targetSpeed; // Keep final speed
+    
+    // Contain final speed within limits
+    finalSpeed = constrain(finalSpeed, -250, 250);
+
+    // Set motor speed based on final speed
+    setMotorSpeed(finalSpeed);
+
+    // Used to Debugg in Print PID-related information
+    #ifdef DEBUG_MODE_PID
+    Serial.println(" ");
+    Serial.println(targetSpeed);
+    Serial.print("Motor Engage = ");
+    Serial.print(finalSpeed);
+    Serial.print("  angleMapped = ");
+    Serial.print(angleMapped);
+    Serial.print("  target = ");
+    Serial.print(targetAngle);
+    #endif
+  
+    // Check the MPU6050 sensor if data is ready
+    if(!dmpReady) return;
+    if(mpu.dmpGetCurrentFIFOPacket(fifoBuffer))
+    {
+        // Read sensor data from MPU6050
+        mpu.dmpGetQuaternion(&q, fifoBuffer);
+        mpu.dmpGetGravity(&gravity, &q);
+        mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
+
+        // Print yaw, pitch, and roll angles
+        #ifdef DEBUG_MODE_YPR
+        Serial.print("ypr\t");
+        Serial.print(ypr[0] * 180/M_PI);
+        Serial.print("\t");
+        Serial.print(ypr[1] * 180/M_PI);
+        Serial.print("\t");
+        Serial.println(ypr[2] * 180/M_PI);
+        #endif
+
+        // Update the angle sample with pitch angle
+        angleSample = (ypr[1] * 180/M_PI);
+    }
+    
+    // Update Modbus that is holding register with the angle data
+    regData.Hreg(0, angleSample);
+    
+    // Handling the Modbus communication tasks
+    regData.task();
+}
